@@ -109,10 +109,10 @@ try {
     if ($null -eq $s.scheduled) { $s.scheduled = [bool](("$($e.prompt)" -match '<scheduled-task') -or ((Slice $e.transcript_path 'Begin') -match '<scheduled-task')) }
     elseif (-not $s.scheduled -and "$($e.prompt)" -match '^\s*<scheduled-task') { $s.scheduled = $true }
     # A finished reply that hands you a step ("press Ctrl+S", "you should decide", "the push failed") is waiting on you.
-    $needRx = '(?i)\b(you (should|need to|must|will need to|have to|can now)|your (call|decision|turn|ok|approval|go-ahead)|decide|press |click |tap |reply |type |sign in|log in|waiting (for|on) you|needs? (you|your)|still (public|broken|failing|private)|failed|conflict)'
+    $needRx = "(?i)\b(you('ll| will)? (should|need to|must|have to)|(can|could) you\b|your (call|decision|turn|ok|approval|go-ahead)\b|waiting (for|on) you|needs? your\b|^\s*(press|click|tap|run|type|reply|decide|sign in|log in|approve|choose|pick)\b|please (press|click|tap|run|type|reply|check|decide|confirm|sign|log|approve|choose|pick))"
     $asked = if ($e.prompt) { HumanText $e.prompt } else { '' }
     switch ($e.hook_event_name) {
-      'UserPromptSubmit' { $s.state = 'working'; if ($asked.Length -ge 12) { $s.note = Clean ('Asked: ' + $asked) 140 } } # a bare "yes" says nothing, so the last note stays
+      'UserPromptSubmit' { $s.state = 'working'; $s.turnStart = $now; if ($asked.Length -ge 12) { $s.note = Clean ('Asked: ' + $asked) 140 } } # a bare "yes" says nothing, so the last note stays
       'Stop'             {
         $lr = LastReply $tail; $s.note = $lr.note
         if ($lr.limit) { $s.state = 'paused'; $s.note = $lr.limit }

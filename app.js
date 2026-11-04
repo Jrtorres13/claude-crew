@@ -1,6 +1,6 @@
 /* Claude Crew: every Claude task as a tiny Claude at work. No API: reads an encrypted feed a scheduled Claude task writes hourly. */
 "use strict";
-const BUILD = 6;
+const BUILD = 7;
 const OWNER = "Jrtorres13", REPO = "claude-crew";
 // The feed rides on the morning-brief repo's "feed" branch, which scheduled Claude tasks can already push to.
 const FEED_URL = `https://raw.githubusercontent.com/${OWNER}/morning-brief/feed/crew-feed.json`;
@@ -556,7 +556,7 @@ $("#updGo").addEventListener("click", async () => {
 // A free Cloudflare Worker (hub/). It only ever sees hashes of your key and encrypted blobs, never a title.
 const hubUrl = () => ls.get("crew:hub", "");
 const hex = async t => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map(b => b.toString(16).padStart(2, "0")).join("");
-async function hubIds() { return { room: await hex("crew-room:" + feedKey), auth: await hex("crew-auth:" + feedKey) }; }
+async function hubIds() { const auth = await hex("crew-auth:" + feedKey); return { room: await hex(auth), auth }; }
 let syncKey = null, syncKeyFor = "";
 async function syncAes() {
   if (syncKey && syncKeyFor === feedKey) return syncKey;
@@ -611,7 +611,7 @@ function alertText() {
   if (isiOS() && !standalone()) return "First add Claude Crew to your Home Screen: Share, then Add to Home Screen";
   if (!("PushManager" in window) || !("serviceWorker" in navigator)) return "This browser can't do alerts";
   if (window.Notification && Notification.permission === "denied") return "Alerts are blocked. Allow them for this app in your phone's Settings";
-  return set.alerts ? "On. You get an alert when a task finishes, pauses or needs you" : "Get an alert when a task finishes, pauses or needs you";
+  return set.alerts ? "On. Alerts when a task needs you, pauses, or finishes a long job" : "Get an alert when a task needs you, pauses, or finishes a long job";
 }
 async function saveSecret() { // the service worker unlocks the feed itself when an alert arrives
   try { const c = await caches.open("crew-secret"); await c.put("./crew-secret", new Response(JSON.stringify({ key: feedKey, live: LIVE_URL }))); } catch (e) { }

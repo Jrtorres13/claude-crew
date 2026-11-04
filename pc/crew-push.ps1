@@ -114,6 +114,8 @@ function PushOnce {
     if ($s.scheduled) { continue }
     $title = if ($s.title) { $s.title } else { 'Claude in ' + $(if ($s.folder) { $s.folder } else { 'a folder' }) }
     $it = [ordered]@{ id = $p.Name; title = $title; state = $s.state; source = 'pc'; project = $s.folder; started = $s.started; updated = $s.updated }
+    # "done" only alerts after a turn of 3+ minutes, so quick back-and-forth doesn't buzz the phone.
+    if ($s.turnStart) { try { $it.long = (([datetime]::Parse($s.updated) - [datetime]::Parse($s.turnStart)).TotalSeconds -ge 180) } catch { } }
     if ($s.note) { $it.note = $s.note }
     $sid = $p.Name -replace '^pc_', ''
     if ($sid -match '^[0-9a-f-]{36}$') { $it.resume = "claude --resume $sid" }
@@ -147,11 +149,12 @@ function Notify {
   $new = @(); $next = [ordered]@{}
   foreach ($it in $script:lastItems) {
     $sig = "$($it.state)|$($it.updated)"; $next[$it.id] = $sig
-    if ($it.state -in 'needs_you', 'done', 'paused' -and $seen[$it.id] -ne $sig) { $new += $it.id }
+    $alerts = $it.state -in 'needs_you', 'paused' -or ($it.state -eq 'done' -and $it.long)
+    if ($alerts -and $seen[$it.id] -ne $sig) { $new += $it.id }
   }
   [IO.File]::WriteAllText($f, ($next | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
   if ($first -or -not $new.Count) { return }
-  $room = Hex ('crew-room:' + $cfg.key); $auth = Hex ('crew-auth:' + $cfg.key)
+  $auth = Hex ('crew-auth:' + $cfg.key); $room = Hex $auth
   try {
     $res = Invoke-RestMethod -Method Post -Uri ($cfg.hub.TrimEnd('/') + "/room/$room/notify") -ContentType 'application/json' -Body (@{ auth = $auth; n = $new.Count } | ConvertTo-Json -Compress) -TimeoutSec 15
     Log "alert sent to $($res.sent) phone(s) for $($new.Count) change(s)"

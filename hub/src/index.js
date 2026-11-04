@@ -1,5 +1,5 @@
-// Claude Crew hub. Rooms are named by SHA-256 of the feed key, so only someone with the key can find one.
-// The first caller of a room sets its auth (also a hash of the key); every later call must match it.
+// Claude Crew hub. auth = SHA-256 of the feed key, room = SHA-256 of auth: the room proves the auth without
+// storing anything, and only someone with the key can make either. Writes are capped per IP (Cache API, free).
 //   GET  /vapid                      -> { key }  public Web Push key (made once, kept in KV)
 //   POST /room/:room/sub     {auth, sub}        save a phone's push subscription (max 10 per room)
 //   POST /room/:room/unsub   {auth, endpoint}
@@ -42,9 +42,16 @@ async function pushOne(v, sub) {
 
 async function room(env, id, auth) {
   if (!HEX.test(id) || !HEX.test(auth || "")) return "bad";
-  const want = await sha(auth), have = await env.CREW.get("auth:" + id);
-  if (!have) { await env.CREW.put("auth:" + id, want); return "ok"; }
-  return have === want ? "ok" : "denied";
+  return (await sha(auth)) === id ? "ok" : "denied";
+}
+// At most LIMIT write calls per IP per hour, counted in the edge cache (no KV writes spent on counting).
+const LIMIT = 90;
+async function overLimit(req) {
+  const ip = req.headers.get("CF-Connecting-IP") || "x", hour = Math.floor(Date.now() / 3600000);
+  const key = new Request(`https://rl.crew/${encodeURIComponent(ip)}/${hour}`), c = caches.default;
+  const n = Number((await (await c.match(key))?.text()) || 0) + 1;
+  await c.put(key, new Response(String(n), { headers: { "Cache-Control": "max-age=3600" } }));
+  return n > LIMIT;
 }
 
 export default {
@@ -57,6 +64,7 @@ export default {
       const [, id, what] = p;
       const body = req.method === "GET" ? {} : await req.json().catch(() => ({}));
       if (JSON.stringify(body).length > 40000) return json(req, { error: "too big" }, 413);
+      if (req.method !== "GET" && await overLimit(req)) return json(req, { error: "slow down" }, 429);
       const ok = await room(env, id, req.method === "GET" ? url.searchParams.get("auth") : body.auth);
       if (ok !== "ok") return json(req, { error: ok }, ok === "bad" ? 400 : 403);
       const subsKey = "subs:" + id;

@@ -1,5 +1,5 @@
 // Claude Crew service worker: network first (so updates land), cache as the offline fallback. The feed is never cached here.
-const CACHE = "crew-shell-6";
+const CACHE = "crew-shell-7";
 const SHELL = ["./", "index.html", "app.js", "sprites.js", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE && k !== "crew-secret").map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -30,7 +30,7 @@ async function alertsFor() {
   const r = await fetch(sec.live, { cache: "no-store", headers: { Accept: "application/vnd.github.raw+json" } });
   const feed = await unlock2(await r.json(), sec.key);
   const seen = (await (await c.match("./crew-notified"))?.json()) || {};
-  const fresh = (feed.items || []).filter(i => !i.scheduled && ["needs_you", "done", "paused"].includes(i.state) && seen[i.id] !== i.state + "|" + i.updated
+  const fresh = (feed.items || []).filter(i => !i.scheduled && (["needs_you", "paused"].includes(i.state) || (i.state === "done" && i.long)) && seen[i.id] !== i.state + "|" + i.updated
     && Date.now() - Date.parse(i.updated) < 2 * 3600 * 1000).sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated));
   const next = {}; (feed.items || []).forEach(i => { next[i.id] = i.state + "|" + i.updated; });
   await c.put("./crew-notified", new Response(JSON.stringify(next)));
