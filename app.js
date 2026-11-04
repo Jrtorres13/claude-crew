@@ -1,6 +1,6 @@
 /* Claude Crew: every Claude task as a tiny Claude at work. No API: reads an encrypted feed a scheduled Claude task writes hourly. */
 "use strict";
-const BUILD = 3;
+const BUILD = 4;
 const OWNER = "Jrtorres13", REPO = "claude-crew";
 // The feed rides on the morning-brief repo's "feed" branch, which scheduled Claude tasks can already push to.
 const FEED_URL = `https://raw.githubusercontent.com/${OWNER}/morning-brief/feed/crew-feed.json`;
@@ -25,7 +25,7 @@ let feedKey = ls.get("crew:key", "");
 const S = { feed: null, hourly: ls.get("crew:feed", null), live: ls.get("crew:live", null), status: "loading", why: "", view: "floor", items: [], first: true };
 let H; // history for the current mode (real or demo)
 function histKey() { return demoOn() ? "crew:hist:demo" : "crew:hist"; }
-function loadHist() { H = Object.assign({ xp: {}, done: {}, seen: {}, assign: {} }, ls.get(histKey(), {})); }
+function loadHist() { H = Object.assign({ xp: {}, done: {}, seen: {}, assign: {}, checked: {} }, ls.get(histKey(), {})); }
 function saveHist() { ls.set(histKey(), H); }
 function saveSet() { ls.set("crew:settings", set); }
 const demoOn = () => set.demo || !feedKey;
@@ -198,11 +198,15 @@ function render(events) {
   renderSync();
 }
 const active = () => S.items.filter(i => i.state !== "done").sort((a, b) => (a.state === "needs_you" ? 0 : 1) - (b.state === "needs_you" ? 0 : 1) || b.updated - a.updated);
-const doneToday = () => S.items.filter(i => i.state === "done" && isToday(i.updated)).sort((a, b) => b.updated - a.updated);
+// Finished work you haven't opened yet keeps an orange dot until you tap it.
+const isUnchecked = i => i.state === "done" && isToday(i.updated) && !((H.checked[i.id] || 0) >= i.updated);
+const toCheck = () => S.items.filter(isUnchecked).sort((a, b) => b.updated - a.updated);
+const doneToday = () => S.items.filter(i => i.state === "done" && isToday(i.updated) && !isUnchecked(i)).sort((a, b) => b.updated - a.updated);
+function markChecked(ids) { ids.forEach(id => { const it = S.items.find(i => i.id === id); if (it) H.checked[id] = it.updated || now(); }); saveHist(); }
 function names(list) { const n = list.map(i => vOf(i).name); return n.length <= 2 ? n.join(" and ") : n.slice(0, -1).join(", ") + " and " + n[n.length - 1]; }
 
 function renderFloor(events) {
-  const act = active(), needs = act.filter(i => i.state === "needs_you"), work = act.filter(i => i.state === "working"), done = doneToday();
+  const act = active(), needs = act.filter(i => i.state === "needs_you"), work = act.filter(i => i.state === "working"), done = doneToday(), check = toCheck();
   const fresh = new Set(events.filter(e => e.type === "new").map(e => e.it.id));
   const h1 = $("#floorTitle"), lede = $("#floorLede"), pods = $("#pods");
   if (S.status === "loading" && !S.items.length) {
@@ -238,15 +242,17 @@ function renderFloor(events) {
     (list.length ? `<div class="rows">${list.map(it => row(it, cls)).join("")}</div>` : (emptyMsg ? `<div class="empty">${emptyMsg}</div>` : ""));
   $("#lists").innerHTML =
     (needs.length ? sec("Needs you", needs, "needs") : "") +
+    (check.length ? sec("Finished, not checked", check, "unchecked").replace("</h2>", `<button type="button" class="h-act" data-act="check-all">Mark all checked</button></h2>`) : "") +
     sec("Working", work, "", "Nobody is working right now.") +
     sec("Done today", done, "", "Nothing finished yet today.");
-  const b = $("#needsBadge"); b.hidden = !needs.length; b.textContent = needs.length;
-  document.title = needs.length ? `(${needs.length}) Claude Crew` : "Claude Crew";
+  const nb = needs.length + check.length;
+  const b = $("#needsBadge"); b.hidden = !nb; b.textContent = nb;
+  document.title = nb ? `(${nb}) Claude Crew` : "Claude Crew";
 }
 function row(it, cls) {
   const v = vOf(it);
   return `<button class="row ${cls || ""}" type="button" data-id="${esc(it.id)}" style="--acc:${v.accent}">
-    <span class="ava">${sp(v.id, it.state, 2)}</span>
+    <span class="ava">${sp(v.id, it.state, 2)}${cls === "unchecked" ? `<i class="dot" aria-label="Not checked yet"></i>` : ""}</span>
     <span class="txt"><span class="t">${esc(it.title)}</span><span class="s">${esc(it.note || placeName(it))}</span></span>
     <span class="when">${esc(ago(it.updated))}</span></button>`;
 }
@@ -313,6 +319,7 @@ function taskSheet(id) {
   const it = S.items.find(i => i.id === id);
   const d = H.done[id];
   if (!it && !d) return;
+  if (it && isUnchecked(it)) { markChecked([id]); renderFloor([]); }
   const v = it ? vOf(it) : (VBY[d.v] || V[0]);
   const state = it ? it.state : "done";
   const label = { working: "Working", needs_you: "Needs you", done: "Done", idle: "Idle" }[state];
@@ -500,6 +507,7 @@ document.addEventListener("click", e => {
   const act = el.dataset.act;
   if (act === "close") closeSheet();
   if (act === "settings") settingsSheet();
+  if (act === "check-all") { markChecked(toCheck().map(i => i.id)); sfx.tap?.(); renderFloor([]); }
   if (act === "demo-off") { set.demo = false; saveSet(); loadHist(); S.items = []; S.first = true; refresh(true); }
 });
 document.addEventListener("submit", async e => {

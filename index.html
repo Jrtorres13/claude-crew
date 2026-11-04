@@ -73,6 +73,7 @@ h1 em{font-style:normal;color:var(--needs)}
 .lede{color:var(--muted);margin:0 0 16px;font-size:15px}
 h2{font:500 15px/1.3 var(--f-body);color:var(--muted);margin:26px 0 10px;display:flex;align-items:baseline;gap:8px}
 h2 .n{font-variant-numeric:tabular-nums;color:var(--faint)}
+h2 .h-act{margin-left:auto;font:500 13px/1 var(--f-body);color:var(--needs);background:none;border:0;padding:10px 0 10px 12px;min-height:44px;cursor:pointer}
 
 /* the floor (signature) */
 .floor{position:relative;border-radius:var(--r-lg);background:
@@ -112,6 +113,11 @@ h2 .n{font-variant-numeric:tabular-nums;color:var(--faint)}
 .row.needs{border-color:color-mix(in srgb,var(--needs) 45%,transparent);background:linear-gradient(90deg,var(--needs-bg),var(--surface) 70%)}
 .ava{flex:none;display:grid;place-items:center;width:52px;height:52px;border-radius:14px;background:color-mix(in srgb,var(--acc) 16%,transparent);overflow:hidden}
 .ava svg{width:52px;height:60px;margin-top:2px}
+.ava{position:relative}
+.ava .dot{position:absolute;top:4px;right:4px;width:11px;height:11px;border-radius:50%;background:var(--needs);box-shadow:0 0 0 2px var(--surface);animation:dotIn .4s cubic-bezier(.2,1.4,.4,1) both}
+@keyframes dotIn{from{transform:scale(0)}to{transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.ava .dot{animation:none}}
+.row.unchecked{border-color:color-mix(in srgb,var(--needs) 30%,transparent)}
 .row .txt{flex:1;min-width:0}
 .row .t{font-weight:500;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .row .s{font-size:13px;color:var(--muted);margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
