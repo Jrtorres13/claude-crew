@@ -1,6 +1,6 @@
 /* Claude Crew: every Claude task as a tiny Claude at work. No API: reads an encrypted feed a scheduled Claude task writes hourly. */
 "use strict";
-const BUILD = 4;
+const BUILD = 5;
 const OWNER = "Jrtorres13", REPO = "claude-crew";
 // The feed rides on the morning-brief repo's "feed" branch, which scheduled Claude tasks can already push to.
 const FEED_URL = `https://raw.githubusercontent.com/${OWNER}/morning-brief/feed/crew-feed.json`;
@@ -199,7 +199,7 @@ function render(events) {
 }
 const active = () => S.items.filter(i => i.state !== "done").sort((a, b) => (a.state === "needs_you" ? 0 : 1) - (b.state === "needs_you" ? 0 : 1) || b.updated - a.updated);
 // Finished work you haven't opened yet keeps an orange dot until you tap it.
-const isUnchecked = i => i.state === "done" && isToday(i.updated) && !((H.checked[i.id] || 0) >= i.updated);
+const isUnchecked = i => i.state === "done" && now() - i.updated < 7 * 864e5 && !((H.checked[i.id] || 0) >= i.updated);  // stays until you open it (up to a week)
 const toCheck = () => S.items.filter(isUnchecked).sort((a, b) => b.updated - a.updated);
 const doneToday = () => S.items.filter(i => i.state === "done" && isToday(i.updated) && !isUnchecked(i)).sort((a, b) => b.updated - a.updated);
 function markChecked(ids) { ids.forEach(id => { const it = S.items.find(i => i.id === id); if (it) H.checked[id] = it.updated || now(); }); saveHist(); }
