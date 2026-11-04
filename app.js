@@ -1,6 +1,6 @@
 /* Claude Crew: every Claude task as a tiny Claude at work. No API: reads an encrypted feed a scheduled Claude task writes hourly. */
 "use strict";
-const BUILD = 2;
+const BUILD = 3;
 const OWNER = "Jrtorres13", REPO = "claude-crew";
 // The feed rides on the morning-brief repo's "feed" branch, which scheduled Claude tasks can already push to.
 const FEED_URL = `https://raw.githubusercontent.com/${OWNER}/morning-brief/feed/crew-feed.json`;
@@ -115,10 +115,23 @@ function normState(s) {
   if (/done|complete|idle|archiv|resolv|stop|fail/.test(s)) return "done";
   return "done";
 }
+// Titles from prompts can arrive wrapped (<relay ...>, <pasted_content ...>, <scheduled-task ...>).
+// Never show the wrapper: pull out the real words, or fall back to the folder.
+function tidyTitle(t, project) {
+  t = String(t || "");
+  const task = t.match(/<scheduled[-_]?task[^>]*name="([^"]+)/i);
+  if (task) return "Scheduled task: " + task[1].replace(/[-_]/g, " ");
+  if (/^\s*<\s*(relay|pasted_?content|coordinator|system|session|cited|note)/i.test(t) || /^\s*<[^>]*$/.test(t)) {
+    const rest = t.replace(/<[^>]*>?/g, " ").replace(/\s+/g, " ").trim();
+    return rest.length > 6 && !/=/.test(rest) ? rest : (project ? "Working in " + project : "Claude session");
+  }
+  if (/^Claude in /.test(t) && project) return "Working in " + project;
+  return t.replace(/<[^>]+>/g, "").trim() || (project ? "Working in " + project : "Claude session");
+}
 function normalize(feed) {
   const list = (feed && Array.isArray(feed.items)) ? feed.items : [];
   return list.filter(x => x && x.id && x.title).map(x => ({
-    id: String(x.id), title: String(x.title).slice(0, 140), state: normState(x.state),
+    id: String(x.id), title: tidyTitle(x.title, x.project).slice(0, 140), state: normState(x.state),
     source: x.source || "cloud", project: x.project || "", note: String(x.note || "").slice(0, 240),
     started: ts(x.started) || ts(x.updated), updated: ts(x.updated) || ts(x.started), url: /^https:\/\/claude\.ai\//.test(x.url || "") ? x.url : "",
   }));
@@ -237,7 +250,7 @@ function row(it, cls) {
     <span class="txt"><span class="t">${esc(it.title)}</span><span class="s">${esc(it.note || placeName(it))}</span></span>
     <span class="when">${esc(ago(it.updated))}</span></button>`;
 }
-function placeName(it) { return it.source === "pc" ? "On your PC" : it.source === "project" ? (it.project ? it.project + " project" : "Claude project") : "Claude Code on the web"; }
+function placeName(it) { return it.source === "pc" ? (it.project ? `On your PC, in ${it.project}` : "On your PC") : it.source === "project" ? (it.project ? it.project + " project" : "Claude project") : "Claude Code on the web"; }
 
 function renderCrew() {
   const tot = totalXp(), me = level(tot, 300), doneN = Object.keys(H.done).length, st = streak();
