@@ -17,4 +17,5 @@ The repo is public; without the key the feed is unreadable. The key is never com
 - `index.html`, `app.js`, `sprites.js`: the app (no build step)
 - `sw.js`, `manifest.webmanifest`, `icons/`: installable on the home screen, works offline
 - `version.json`: bump `build` (and `BUILD` in app.js) to show "Update now"
-- `dev/`: Playwright checks (`node dev/test.cjs`)
+- `pc/`: live sync for Claude Code on the PC (a hook that pushes an encrypted `crew-live.json` to the `live` branch). Install: `powershell -ExecutionPolicy Bypass -File pc\install.ps1`
+- `dev/`: Playwright checks (`node dev/test.cjs`, `dev/test-feed.cjs`, `dev/test-live.cjs`)

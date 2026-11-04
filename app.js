@@ -1,11 +1,13 @@
 /* Claude Crew: every Claude task as a tiny Claude at work. No API: reads an encrypted feed a scheduled Claude task writes hourly. */
 "use strict";
-const BUILD = 1;
+const BUILD = 2;
 const OWNER = "Jrtorres13", REPO = "claude-crew";
 // The feed rides on the morning-brief repo's "feed" branch, which scheduled Claude tasks can already push to.
 const FEED_URL = `https://raw.githubusercontent.com/${OWNER}/morning-brief/feed/crew-feed.json`;
 const VERSION_URL = `https://raw.githubusercontent.com/${OWNER}/${REPO}/main/version.json`;
-const POLL_MS = 90 * 1000, STALE_MS = 2.5 * 3600 * 1000;
+// Live sync: the PC hook (pc/crew-push.ps1) writes crew-live.json to the "live" branch. The API answers fresh; a 304 is free.
+const LIVE_URL = `https://api.github.com/repos/${OWNER}/${REPO}/contents/crew-live.json?ref=live`;
+const POLL_MS = 45 * 1000, STALE_MS = 2.5 * 3600 * 1000;
 const { V, svg } = window.CrewSprites;
 const VBY = Object.fromEntries(V.map(v => [v.id, v]));
 
@@ -20,7 +22,7 @@ const sp = (id, state, k, extra) => svg(id, state).replace("<svg ", `<svg width=
 // ---------- state ----------
 const set = Object.assign({ sound: true, haptics: true, wake: false, theme: "night", demo: false }, ls.get("crew:settings", {}));
 let feedKey = ls.get("crew:key", "");
-const S = { feed: ls.get("crew:feed", null), status: "loading", why: "", view: "floor", items: [], first: true };
+const S = { feed: null, hourly: ls.get("crew:feed", null), live: ls.get("crew:live", null), status: "loading", why: "", view: "floor", items: [], first: true };
 let H; // history for the current mode (real or demo)
 function histKey() { return demoOn() ? "crew:hist:demo" : "crew:hist"; }
 function loadHist() { H = Object.assign({ xp: {}, done: {}, seen: {}, assign: {} }, ls.get(histKey(), {})); }
@@ -52,14 +54,48 @@ async function decrypt(box, pass) {
   const key = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: b64u8(box.salt), iterations: box.iter || 150000, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
   return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64u8(box.iv) }, key, b64u8(box.data))));
 }
+// v2 (from the PC): PBKDF2-SHA256 -> AES-CBC key + HMAC key, MAC checked before decrypting.
+async function decrypt2(box, pass) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveBits"]);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", salt: b64u8(box.salt), iterations: box.iter || 150000, hash: "SHA-256" }, base, 512));
+  const iv = b64u8(box.iv), ct = b64u8(box.data), signed = new Uint8Array(iv.length + ct.length); signed.set(iv); signed.set(ct, iv.length);
+  const mk = await crypto.subtle.importKey("raw", bits.slice(32), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  if (!await crypto.subtle.verify("HMAC", mk, b64u8(box.mac), signed)) throw new Error("mac");
+  const ek = await crypto.subtle.importKey("raw", bits.slice(0, 32), { name: "AES-CBC" }, false, ["decrypt"]);
+  return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-CBC", iv }, ek, ct)));
+}
+const unlock = (box, pass) => (box.v === 2 ? decrypt2 : decrypt)(box, pass).then(p => (p.generated_at = p.generated_at || box.updated, p));
+async function getHourly() {
+  try { const r = await fetch(FEED_URL + "?t=" + now(), { cache: "no-store" }); if (!r.ok) return { why: r.status === 404 ? "nofeed" : "http" };
+    const box = await r.json(); try { return { feed: await unlock(box, feedKey) }; } catch (e) { return { why: "badkey" }; } }
+  catch (e) { return { why: "offline" }; }
+}
+async function getLive() {
+  const tag = S.live && ls.get("crew:live-etag", "");
+  try {
+    const r = await fetch(LIVE_URL, { cache: "no-store", headers: Object.assign({ Accept: "application/vnd.github.raw+json" }, tag ? { "If-None-Match": tag } : {}) });
+    if (r.status === 304) return { same: true };
+    if (!r.ok) return { why: r.status === 404 ? "nolive" : "http" };
+    const box = await r.json(); ls.set("crew:live-etag", r.headers.get("ETag") || "");
+    try { return { feed: await unlock(box, feedKey) }; } catch (e) { return { why: "badkey" }; }
+  } catch (e) { return { why: "offline" }; }
+}
+// Hourly feed covers cloud + project threads; the live feed covers this PC. While the PC is live, its sessions come from it alone.
+function merged() {
+  const live = S.live && now() - ts(S.live.generated_at) < 12 * 3600 * 1000 ? S.live : null;
+  const items = [...((S.hourly && S.hourly.items) || []).filter(i => !(live && i.source === "pc")), ...((live && live.items) || [])];
+  const gens = [S.hourly, live].filter(Boolean).map(f => ts(f.generated_at));
+  return { generated_at: gens.length ? new Date(Math.max(...gens)).toISOString() : "", items, sig: [S.hourly && S.hourly.generated_at, live && live.generated_at].join("|") };
+}
 async function fetchFeed() {
   if (!feedKey) return { ok: false, why: "nokey" };
   if (!window.crypto || !crypto.subtle) return { ok: false, why: "nocrypto" };
-  let box;
-  try { const r = await fetch(FEED_URL + "?t=" + now(), { cache: "no-store" }); if (!r.ok) return { ok: false, why: r.status === 404 ? "nofeed" : "http" }; box = await r.json(); }
-  catch (e) { return { ok: false, why: "offline" }; }
-  try { const plain = await decrypt(box, feedKey); plain.generated_at = plain.generated_at || box.updated; return { ok: true, feed: plain }; }
-  catch (e) { return { ok: false, why: "badkey" }; }
+  const [h, l] = await Promise.all([getHourly(), getLive()]);
+  if (h.feed) { S.hourly = h.feed; ls.set("crew:feed", h.feed); }
+  if (l.feed) { S.live = l.feed; ls.set("crew:live", l.feed); }
+  if (h.why === "badkey" || l.why === "badkey") return { ok: false, why: "badkey" };
+  if (!S.hourly && !S.live) return { ok: false, why: h.why || "nofeed" };
+  return { ok: true, feed: merged(), why: h.why === "offline" ? "offline" : "" };
 }
 const WHY = {
   nokey: "Add your feed key in Settings to see your real Claude work.",
@@ -314,7 +350,7 @@ function settingsSheet(msg, bad) {
         <button type="button" data-theme-pick="night" aria-pressed="${set.theme === "night"}">Night</button><button type="button" data-theme-pick="ivory" aria-pressed="${set.theme === "ivory"}">Ivory</button></span></div>
     </div>
     <div class="actions"><button class="btn" type="button" data-act="close">Done</button></div>
-    <p class="ver">Claude Crew build ${BUILD}. New activity arrives about once an hour.</p>`);
+    <p class="ver">Your PC: ${S.live ? "live, last " + ago(ts(S.live.generated_at)) : "live sync not set up yet"}<br>Cloud and project threads: hourly${S.hourly ? ", last " + ago(ts(S.hourly.generated_at)) : ""}<br>Claude Crew build ${BUILD}</p>`);
 }
 
 // ---------- juice: toasts, confetti, sound, haptics ----------
@@ -405,13 +441,13 @@ async function refresh(loud) {
     if (demoOn()) { S.status = "ok"; S.why = feedKey ? "" : "nokey"; apply(demoFeed()); if (loud) toast("Demo crew refreshed."); return; }
     const r = await fetchFeed();
     if (r.ok) {
-      const changed = !S.feed || S.feed.generated_at !== r.feed.generated_at || S.first;
-      S.feed = r.feed; ls.set("crew:feed", r.feed); S.status = "ok"; S.why = "";
+      const changed = !S.feed || S.feed.sig !== r.feed.sig || S.first;
+      S.feed = r.feed; S.status = "ok"; S.why = "";
       const n = changed ? apply(r.feed) : (renderSync(), 0);
       if (loud && !n) toast(changed ? "Up to date." : `No news. Claude last checked in ${ago(ts(r.feed.generated_at))}.`);
     } else {
       S.status = "error"; S.why = r.why;
-      if (S.feed) apply(S.feed, true); else render([]);
+      if (S.hourly || S.live) { S.feed = merged(); apply(S.feed, true); } else render([]);
       if (loud || r.why === "badkey") toast(esc(WHY[r.why] || "Couldn't load your feed."));
     }
   } finally { busy = false; S.first = false; $("#sync").classList.remove("spin"); }
@@ -492,7 +528,7 @@ $("#updGo").addEventListener("click", async () => {
 $("#brand").innerHTML = sp("forge", "idle", 1) + "<b>Claude Crew</b>";
 applyTheme(); loadHist();
 if (/^#(crew|log)$/.test(location.hash)) show(location.hash.slice(1));
-if (S.feed && !demoOn()) { S.status = "ok"; apply(S.feed, true); } else render([]);
+if ((S.hourly || S.live) && !demoOn()) { S.status = "ok"; S.feed = merged(); apply(S.feed, true); } else render([]);
 refresh();
 setInterval(() => { if (document.visibilityState === "visible") refresh(); }, POLL_MS);
 setInterval(() => { if (document.visibilityState === "visible") { renderSync(); document.querySelectorAll(".row .when").length && S.items.length && renderFloor([]); } }, 30000);
