@@ -2,7 +2,8 @@
 "use strict";
 const BUILD = 1;
 const OWNER = "Jrtorres13", REPO = "claude-crew";
-const FEED_URL = `https://raw.githubusercontent.com/${OWNER}/${REPO}/feed/crew-feed.json`;
+// The feed rides on the morning-brief repo's "feed" branch, which scheduled Claude tasks can already push to.
+const FEED_URL = `https://raw.githubusercontent.com/${OWNER}/morning-brief/feed/crew-feed.json`;
 const VERSION_URL = `https://raw.githubusercontent.com/${OWNER}/${REPO}/main/version.json`;
 const POLL_MS = 90 * 1000, STALE_MS = 2.5 * 3600 * 1000;
 const { V, svg } = window.CrewSprites;

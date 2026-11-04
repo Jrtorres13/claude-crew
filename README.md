@@ -9,7 +9,7 @@ A phone app that shows every Claude task you have going as a tiny pixel Claude a
 ## How it knows what Claude is doing
 
 A scheduled Claude task runs about once an hour. It lists your Claude sessions and project threads,
-writes `crew-feed.json`, encrypts it (AES-GCM, `tools/feed.mjs`) and pushes it to the `feed` branch.
+writes `crew-feed.json`, encrypts it (AES-GCM, `tools/feed.mjs`) and pushes it to the `feed` branch of Jrtorres13/morning-brief (next to the Morning Brief feed).
 The repo is public; without the key the feed is unreadable. The key is never committed.
 
 ## Files
