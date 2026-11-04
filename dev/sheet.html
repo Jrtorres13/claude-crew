@@ -1,0 +1,5 @@
+<!doctype html><html><body style="margin:0;background:#1f1d1a;display:flex;flex-wrap:wrap;gap:16px;padding:16px;width:900px">
+<script src="../sprites.js"></script>
+<script>
+for (const st of ["working"]) CrewSprites.V.forEach(v=>{const d=document.createElement('div');d.style.cssText='width:200px;color:#eee;font:14px sans-serif;text-align:center';d.innerHTML=CrewSprites.svg(v.id,st,{size:200})+v.name+' '+st;document.body.appendChild(d)});
+</script></body></html>
