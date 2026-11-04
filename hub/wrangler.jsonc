@@ -1,0 +1,11 @@
+// Claude Crew hub: a tiny free Cloudflare Worker that wakes your phones (Web Push) and syncs
+// which finished tasks you have checked across devices. It never sees task titles: the PC and
+// the phones only send it hashes and encrypted blobs. Deploy: see hub/README.md.
+{
+  "name": "claude-crew-hub",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "kv_namespaces": [
+    { "binding": "CREW", "id": "PASTE_KV_ID" }
+  ]
+}

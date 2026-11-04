@@ -1,7 +1,7 @@
 # Installs Claude Crew live sync on this PC: copies the hook, saves the feed key, and adds the hook to Claude Code.
 #   powershell -ExecutionPolicy Bypass -File install.ps1
 # It asks for the feed key (the same key the phone uses). A backup of settings.json is saved first.
-param([string]$Key = '')
+param([string]$Key = '', [string]$Hub = '')
 $ErrorActionPreference = 'Stop'
 $src = Split-Path -Parent $MyInvocation.MyCommand.Path
 $dir = Join-Path $env:LOCALAPPDATA 'ClaudeCrew'
@@ -14,7 +14,13 @@ $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
 if (-not $gh) { Write-Host 'GitHub CLI (gh) was not found. Install it and sign in first. Nothing was installed.' -ForegroundColor Red; exit 1 }
 
 Copy-Item -Force -LiteralPath (Join-Path $src 'crew-hook.ps1'), (Join-Path $src 'crew-push.ps1') -Destination $dir
-[IO.File]::WriteAllText((Join-Path $dir 'config.json'), ([ordered]@{ key = $Key; gh = $gh; repo = 'Jrtorres13/claude-crew' } | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+# Keep settings from an earlier install (aiTitles, hub) unless new ones are given.
+$cfgPath = Join-Path $dir 'config.json'
+$old = if (Test-Path $cfgPath) { Get-Content $cfgPath -Raw | ConvertFrom-Json } else { $null }
+$c = [ordered]@{ key = $Key; gh = $gh; repo = 'Jrtorres13/claude-crew'; aiTitles = $true; hub = '' }
+if ($old) { foreach ($k in 'aiTitles', 'hub') { if ($old.PSObject.Properties[$k]) { $c[$k] = $old.$k } } }
+if ($Hub) { $c.hub = $Hub.Trim() }
+[IO.File]::WriteAllText($cfgPath, ($c | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
 if (-not (Test-Path (Join-Path $dir 'state.json'))) { [IO.File]::WriteAllText((Join-Path $dir 'state.json'), '{}') }
 
 # Add the hook to Claude Code's user settings, once per event, keeping everything already there.

@@ -62,14 +62,23 @@ try {
     return ''
   }
   # Claude's last reply: its first sentence becomes the note; a reply that ends on a question means it is waiting on you, and the question is the note.
+  # A usage-limit stop ("5-hour limit reached - resets 3pm", "Claude AI usage limit reached|1730000000") is a pause, not a finish.
+  function LimitNote([string]$t) {
+    if ($t.Length -gt 400 -or $t -notmatch '(?i)(usage|session|weekly|hour|opus|sonnet)\s*limit|limit (reached|hit|exceeded)|out of (extra )?usage') { return '' }
+    $when = ''
+    if ($t -match '\|(\d{10})\b') { $when = ([DateTimeOffset]::FromUnixTimeSeconds([int64]$Matches[1])).LocalDateTime.ToString('h:mm tt') }
+    elseif ($t -match '(?i)resets?\s+(at\s+)?([^.\n|]{2,30})') { $when = $Matches[2].Trim() }
+    return 'Paused: usage limit reached' + $(if ($when) { ", resets $when" } else { '' })
+  }
   function LastReply([string]$txt) {
-    $r = @{ note = ''; asks = $false }
+    $r = @{ note = ''; asks = $false; limit = '' }
     $lines = $txt -split "`n"
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
       if ($lines[$i] -notmatch '"type"\s*:\s*"assistant"') { continue }
       try { $j = $lines[$i] | ConvertFrom-Json } catch { continue }
       foreach ($c in @($j.message.content)) {
         if ($c.type -eq 'text' -and $c.text.Trim()) {
+          $r.limit = LimitNote $c.text.Trim()
           $last = ($c.text.Trim() -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
           $r.asks = $last -match '\?\s*[*_`)]*\s*$'
           $r.note = Clean $(if ($r.asks) { $last } else { FirstSentence $c.text }) 140
@@ -96,10 +105,19 @@ try {
     if ($e.transcript_path) { $s.transcript = $e.transcript_path }
     if ($e.cwd) { $s.folder = Clean (Split-Path -Leaf $e.cwd) 60 }
     $tail = Slice $e.transcript_path 'End'
+    # Scheduled tasks (they start with a <scheduled-task> wrapper) are routine runs, so the phone never shows them.
+    if ($null -eq $s.scheduled) { $s.scheduled = [bool](("$($e.prompt)" -match '<scheduled-task') -or ((Slice $e.transcript_path 'Begin') -match '<scheduled-task')) }
+    elseif (-not $s.scheduled -and "$($e.prompt)" -match '^\s*<scheduled-task') { $s.scheduled = $true }
+    # A finished reply that hands you a step ("press Ctrl+S", "you should decide", "the push failed") is waiting on you.
+    $needRx = '(?i)\b(you (should|need to|must|will need to|have to|can now)|your (call|decision|turn|ok|approval|go-ahead)|decide|press |click |tap |reply |type |sign in|log in|waiting (for|on) you|needs? (you|your)|still (public|broken|failing|private)|failed|conflict)'
     $asked = if ($e.prompt) { HumanText $e.prompt } else { '' }
     switch ($e.hook_event_name) {
       'UserPromptSubmit' { $s.state = 'working'; if ($asked.Length -ge 12) { $s.note = Clean ('Asked: ' + $asked) 140 } } # a bare "yes" says nothing, so the last note stays
-      'Stop'             { $lr = LastReply $tail; $s.note = $lr.note; $s.state = $(if ($lr.asks) { 'needs_you' } else { 'done' }); $s.retitle = $true }
+      'Stop'             {
+        $lr = LastReply $tail; $s.note = $lr.note
+        if ($lr.limit) { $s.state = 'paused'; $s.note = $lr.limit }
+        else { $s.state = $(if ($lr.asks -or $lr.note -match $needRx) { 'needs_you' } else { 'done' }); $s.retitle = $true }
+      }
       'Notification'     { if ($e.message -match 'permission|approv|allow') { $s.state = 'needs_you'; $s.note = Clean $e.message 140 } else { exit 0 } }
       'SessionEnd'       { if ($s.state -ne 'needs_you') { $s.state = 'done' } }
       'Retitle'          { if ($s.state -eq 'working' -and -not $s.note) { $s.note = Clean (FindHuman $tail -Newest) 140 } }

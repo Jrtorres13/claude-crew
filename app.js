@@ -1,6 +1,6 @@
 /* Claude Crew: every Claude task as a tiny Claude at work. No API: reads an encrypted feed a scheduled Claude task writes hourly. */
 "use strict";
-const BUILD = 5;
+const BUILD = 6;
 const OWNER = "Jrtorres13", REPO = "claude-crew";
 // The feed rides on the morning-brief repo's "feed" branch, which scheduled Claude tasks can already push to.
 const FEED_URL = `https://raw.githubusercontent.com/${OWNER}/morning-brief/feed/crew-feed.json`;
@@ -17,7 +17,7 @@ const ls = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
 };
-const sp = (id, state, k, extra) => svg(id, state).replace("<svg ", `<svg width="${26 * k}" height="${30 * k}" ${extra || ""} `);
+const sp = (id, state, k, extra) => svg(id, state === "paused" ? "done" : state).replace("<svg ", `<svg width="${26 * k}" height="${30 * k}" ${extra || ""} `);
 
 // ---------- state ----------
 const set = Object.assign({ sound: true, haptics: true, wake: false, theme: "night", demo: false }, ls.get("crew:settings", {}));
@@ -94,7 +94,8 @@ async function fetchFeed() {
   if (!window.crypto || !crypto.subtle) return { ok: false, why: "nocrypto" };
   const [h, l] = await Promise.all([getHourly(), getLive()]);
   if (h.feed) { S.hourly = h.feed; ls.set("crew:feed", h.feed); }
-  if (l.feed) { S.live = l.feed; ls.set("crew:live", l.feed); }
+  if (l.feed) { S.live = l.feed; ls.set("crew:live", l.feed); if (/^https:\/\/[a-z0-9.-]+\.workers\.dev\/?$/.test(l.feed.hub || "")) ls.set("crew:hub", l.feed.hub.replace(/\/$/, "")); }
+  pullSync();
   if (h.why === "badkey" || l.why === "badkey") return { ok: false, why: "badkey" };
   if (!S.hourly && !S.live) return { ok: false, why: h.why || "nofeed" };
   return { ok: true, feed: merged(), why: h.why === "offline" ? "offline" : "" };
@@ -110,6 +111,7 @@ const WHY = {
 
 function normState(s) {
   s = String(s || "").toLowerCase();
+  if (/pause|limit/.test(s)) return "paused";
   if (/need|block|review|wait|action/.test(s)) return "needs_you";
   if (/work|run|active|progress|busy/.test(s)) return "working";
   if (/done|complete|idle|archiv|resolv|stop|fail/.test(s)) return "done";
@@ -130,10 +132,12 @@ function tidyTitle(t, project) {
 }
 function normalize(feed) {
   const list = (feed && Array.isArray(feed.items)) ? feed.items : [];
-  return list.filter(x => x && x.id && x.title).map(x => ({
+  // Routine runs of scheduled tasks never show (the PC marks them; old feeds are caught by title).
+  return list.filter(x => x && x.id && x.title && !x.scheduled && !/^\s*(<scheduled[-_]?task|scheduled task\b|claude crew feed$|morning brief claude feed$)/i.test(String(x.title))).map(x => ({
     id: String(x.id), title: tidyTitle(x.title, x.project).slice(0, 140), state: normState(x.state),
     source: x.source || "cloud", project: x.project || "", note: String(x.note || "").slice(0, 240),
     started: ts(x.started) || ts(x.updated), updated: ts(x.updated) || ts(x.started), url: /^https:\/\/claude\.ai\//.test(x.url || "") ? x.url : "",
+    resume: /^claude --resume [0-9a-f-]{36}$/.test(x.resume || "") ? x.resume : "",
   }));
 }
 
@@ -202,11 +206,11 @@ const active = () => S.items.filter(i => i.state !== "done").sort((a, b) => (a.s
 const isUnchecked = i => i.state === "done" && now() - i.updated < 7 * 864e5 && !((H.checked[i.id] || 0) >= i.updated);  // stays until you open it (up to a week)
 const toCheck = () => S.items.filter(isUnchecked).sort((a, b) => b.updated - a.updated);
 const doneToday = () => S.items.filter(i => i.state === "done" && isToday(i.updated) && !isUnchecked(i)).sort((a, b) => b.updated - a.updated);
-function markChecked(ids) { ids.forEach(id => { const it = S.items.find(i => i.id === id); if (it) H.checked[id] = it.updated || now(); }); saveHist(); }
+function markChecked(ids) { ids.forEach(id => { const it = S.items.find(i => i.id === id); if (it) H.checked[id] = it.updated || now(); }); saveHist(); pushSync(); }
 function names(list) { const n = list.map(i => vOf(i).name); return n.length <= 2 ? n.join(" and ") : n.slice(0, -1).join(", ") + " and " + n[n.length - 1]; }
 
 function renderFloor(events) {
-  const act = active(), needs = act.filter(i => i.state === "needs_you"), work = act.filter(i => i.state === "working"), done = doneToday(), check = toCheck();
+  const act = active(), needs = act.filter(i => i.state === "needs_you"), work = act.filter(i => i.state === "working"), paused = act.filter(i => i.state === "paused"), done = doneToday(), check = toCheck();
   const fresh = new Set(events.filter(e => e.type === "new").map(e => e.it.id));
   const h1 = $("#floorTitle"), lede = $("#floorLede"), pods = $("#pods");
   if (S.status === "loading" && !S.items.length) {
@@ -243,7 +247,8 @@ function renderFloor(events) {
   $("#lists").innerHTML =
     (needs.length ? sec("Needs you", needs, "needs") : "") +
     (check.length ? sec("Finished, not checked", check, "unchecked").replace("</h2>", `<button type="button" class="h-act" data-act="check-all">Mark all checked</button></h2>`) : "") +
-    sec("Working", work, "", "Nobody is working right now.") +
+    sec("Working", work, "", paused.length ? "" : "Nobody is working right now.") +
+    (paused.length ? sec("Paused", paused, "paused") : "") +
     sec("Done today", done, "", "Nothing finished yet today.");
   const nb = needs.length + check.length;
   const b = $("#needsBadge"); b.hidden = !nb; b.textContent = nb;
@@ -322,19 +327,21 @@ function taskSheet(id) {
   if (it && isUnchecked(it)) { markChecked([id]); renderFloor([]); }
   const v = it ? vOf(it) : (VBY[d.v] || V[0]);
   const state = it ? it.state : "done";
-  const label = { working: "Working", needs_you: "Needs you", done: "Done", idle: "Idle" }[state];
-  const line = { working: `${v.name} is on it.`, needs_you: `${v.name} is waiting for you.`, done: `${v.name} finished this one.` }[state] || "";
+  const label = { working: "Working", needs_you: "Needs you", done: "Done", idle: "Idle", paused: "Paused" }[state];
+  const line = { working: `${v.name} is on it.`, needs_you: `${v.name} is waiting for you.`, done: `${v.name} finished this one.`, paused: `${v.name} hit the usage limit and is resting.` }[state] || "";
   openSheet(`<div class="hero" style="--acc:${v.accent}"><span class="who"><b>${v.name}</b>, ${v.role.toLowerCase()}</span>${sp(v.id, state, 5)}</div>
     <h3 id="sheetTitle">${esc(it ? it.title : d.title)}</h3>
     <span class="pill ${state}">${label}</span>
     <p class="note">${esc((it && it.note) || line)}</p>
     <dl class="facts">
       ${it ? `<dt>Where</dt><dd>${esc(placeName(it))}</dd>` : ""}
+      ${it && it.resume ? `<dt>Pick it up</dt><dd>On your PC, in a PowerShell window in that folder, paste the resume command</dd>` : ""}
       ${it && it.started ? `<dt>Started</dt><dd>${esc(when(it.started))}</dd>` : ""}
       <dt>${state === "done" ? "Finished" : "Last update"}</dt><dd>${esc(it ? ago(it.updated) : when(d.at))}</dd>
     </dl>
     <div class="actions">
       ${it && it.url ? `<a class="btn primary" href="${esc(it.url)}" target="_blank" rel="noopener" data-autofocus>Open in Claude</a>` : ""}
+      ${it && it.resume ? `<button class="btn primary" type="button" data-copy="${esc(it.resume)}" data-autofocus>Copy resume command</button>` : ""}
       <button class="btn" type="button" data-act="close">Close</button>
     </div>`);
 }
@@ -364,6 +371,7 @@ function settingsSheet(msg, bad) {
         <form class="field" id="keyForm"><input id="keyIn" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${feedKey ? "Saved. Paste a new one to replace it" : "Paste the key Claude gave you"}" aria-label="Feed key"><button class="btn primary" type="submit">Save</button></form>
         ${msg ? `<p class="hint ${bad ? "bad" : ""}" role="status">${esc(msg)}</p>` : ""}
       </div>
+      <div class="set-row"><span class="lab">Phone alerts<small id="alertState">${esc(alertText())}</small></span><span class="seg">${set.alerts ? `<button type="button" data-act="alerts-test">Test</button>` : ""}<button type="button" data-act="alerts" aria-pressed="${!!set.alerts}">${set.alerts ? "On" : "Turn on"}</button></span></div>
       ${sw("sound", "Sounds", "A chime when a task needs you or finishes")}
       ${sw("haptics", "Vibration", "Android phones only")}
       ${sw("wake", "Keep screen on", "For a phone that sits on your desk")}
@@ -493,6 +501,9 @@ document.addEventListener("click", e => {
   const el = e.target.closest("button, a"); if (!el) return;
   if (el.matches(".tab")) { sfx.tap(); show(el.dataset.v); return; }
   if (el.dataset.id) { sfx.tap(); taskSheet(el.dataset.id); return; }
+  if (el.dataset.copy) { copyText(el.dataset.copy).then(ok => toast(ok ? "Copied. Paste it on your PC." : esc(el.dataset.copy))); return; }
+  if (el.dataset.act === "alerts") { alertsOn(); return; }
+  if (el.dataset.act === "alerts-test") { alertTest(); return; }
   if (el.dataset.crew) { sfx.tap(); crewSheet(el.dataset.crew); return; }
   if (el.dataset.preview) { crewSheet(el.dataset.crewId, el.dataset.preview); return; }
   if (el.dataset.sw) {
@@ -541,6 +552,94 @@ $("#updGo").addEventListener("click", async () => {
   location.reload();
 });
 
+// ---------- hub: phone alerts + sync across devices ----------
+// A free Cloudflare Worker (hub/). It only ever sees hashes of your key and encrypted blobs, never a title.
+const hubUrl = () => ls.get("crew:hub", "");
+const hex = async t => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map(b => b.toString(16).padStart(2, "0")).join("");
+async function hubIds() { return { room: await hex("crew-room:" + feedKey), auth: await hex("crew-auth:" + feedKey) }; }
+let syncKey = null, syncKeyFor = "";
+async function syncAes() {
+  if (syncKey && syncKeyFor === feedKey) return syncKey;
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(feedKey), "PBKDF2", false, ["deriveKey"]);
+  syncKey = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: new TextEncoder().encode("crew-sync-v1"), iterations: 100000, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  syncKeyFor = feedKey; return syncKey;
+}
+const u8b64 = u => btoa(String.fromCharCode(...new Uint8Array(u)));
+async function hubCall(path, method, body) {
+  const { room, auth } = await hubIds();
+  const url = `${hubUrl()}/room/${room}/${path}` + (method === "GET" ? `?auth=${auth}` : "");
+  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: method === "GET" ? undefined : JSON.stringify(Object.assign({ auth }, body || {})) });
+  if (!r.ok) throw new Error("hub " + r.status);
+  return r.json();
+}
+let syncBusy = false, syncTimer = 0;
+async function pullSync() {
+  if (!hubUrl() || !feedKey || demoOn() || syncBusy) return;
+  syncBusy = true;
+  try {
+    const { blob } = await hubCall("checks", "GET");
+    if (!blob) { pushSync(); return; }
+    const key = await syncAes();
+    const remote = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64u8(blob.iv) }, key, b64u8(blob.data))));
+    let changed = false, ahead = false;
+    for (const [id, t] of Object.entries(remote.checked || {})) if (!(H.checked[id] >= t)) { H.checked[id] = t; changed = true; }
+    for (const id of Object.keys(H.checked)) if (!((remote.checked || {})[id] >= H.checked[id])) ahead = true;
+    for (const [id, v] of Object.entries(remote.assign || {})) if (H.assign[id] !== v && VBY[v]) { H.assign[id] = v; changed = true; }
+    for (const id of Object.keys(H.assign)) if (!(remote.assign || {})[id]) ahead = true;
+    if (changed) { saveHist(); S.items.length && render([]); }
+    if (ahead) pushSync();
+  } catch (e) { } finally { syncBusy = false; }
+}
+function pushSync() {
+  if (!hubUrl() || !feedKey || demoOn()) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(async () => {
+    try {
+      const week = now() - 8 * 864e5, checked = {};
+      for (const [id, t] of Object.entries(H.checked)) if (t > week) checked[id] = t;
+      const assign = Object.fromEntries(Object.entries(H.assign).slice(-120));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await syncAes(), new TextEncoder().encode(JSON.stringify({ checked, assign })));
+      await hubCall("checks", "PUT", { blob: { iv: u8b64(iv), data: u8b64(data) } });
+    } catch (e) { }
+  }, 1200);
+}
+const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isiOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+function alertText() {
+  if (!hubUrl()) return "Waiting for your PC to set up the alert server";
+  if (isiOS() && !standalone()) return "First add Claude Crew to your Home Screen: Share, then Add to Home Screen";
+  if (!("PushManager" in window) || !("serviceWorker" in navigator)) return "This browser can't do alerts";
+  if (window.Notification && Notification.permission === "denied") return "Alerts are blocked. Allow them for this app in your phone's Settings";
+  return set.alerts ? "On. You get an alert when a task finishes, pauses or needs you" : "Get an alert when a task finishes, pauses or needs you";
+}
+async function saveSecret() { // the service worker unlocks the feed itself when an alert arrives
+  try { const c = await caches.open("crew-secret"); await c.put("./crew-secret", new Response(JSON.stringify({ key: feedKey, live: LIVE_URL }))); } catch (e) { }
+}
+async function alertsOn() {
+  const st = $("#alertState");
+  const say = t => { if (st) st.textContent = t; };
+  if (set.alerts) { set.alerts = false; saveSet(); settingsSheet(); toast("Alerts are off on this phone."); try { const reg = await navigator.serviceWorker.ready; const s = await reg.pushManager.getSubscription(); if (s) { await hubCall("unsub", "POST", { endpoint: s.endpoint }).catch(() => {}); await s.unsubscribe(); } } catch (e) { } return; }
+  if (!feedKey) return say("Add your feed key first");
+  if (!hubUrl() || (isiOS() && !standalone()) || !("PushManager" in window)) return say(alertText());
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") return say("Alerts weren't allowed. You can allow them in your phone's Settings.");
+    say("Turning on…");
+    const reg = await navigator.serviceWorker.ready;
+    const { key } = await (await fetch(hubUrl() + "/vapid")).json();
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u8(key.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((key.length + 3) % 4)) });
+    await hubCall("sub", "POST", { sub: sub.toJSON() });
+    await saveSecret();
+    set.alerts = true; saveSet(); settingsSheet(); toast("Alerts are on. Try Test.");
+  } catch (e) { say("Couldn't turn alerts on. Try again in a minute."); }
+}
+async function alertTest() {
+  try { await saveSecret(); const r = await hubCall("notify", "POST", { test: true }); toast(r.sent ? "Test sent. It arrives in a few seconds." : "No phones are signed up yet."); }
+  catch (e) { toast("Couldn't reach the alert server."); }
+}
+async function copyText(t) { try { await navigator.clipboard.writeText(t); return true; } catch (e) { return false; } }
+
 // ---------- start ----------
 (function setupLink() { // one-time phone setup link: .../claude-crew/#key=KEY
   const m = /[#&]key=([^&]+)/.exec(location.hash); if (!m) return;
@@ -552,7 +651,9 @@ $("#brand").innerHTML = sp("forge", "idle", 1) + "<b>Claude Crew</b>";
 applyTheme(); loadHist();
 if (/^#(crew|log)$/.test(location.hash)) show(location.hash.slice(1));
 if ((S.hourly || S.live) && !demoOn()) { S.status = "ok"; S.feed = merged(); apply(S.feed, true); } else render([]);
-refresh();
+refresh().then(() => { const o = new URLSearchParams(location.search).get("open"); if (o) { try { history.replaceState(null, "", location.pathname); } catch (e) {} taskSheet(o); } });
+if (set.alerts) saveSecret();
+navigator.serviceWorker?.addEventListener?.("message", e => { if (e.data && e.data.type === "open") taskSheet(e.data.id); if (e.data && e.data.type === "refresh") refresh(); });
 setInterval(() => { if (document.visibilityState === "visible") refresh(); }, POLL_MS);
 setInterval(() => { if (document.visibilityState === "visible") { renderSync(); document.querySelectorAll(".row .when").length && S.items.length && renderFloor([]); } }, 30000);
 wake(); checkUpdate(); setInterval(checkUpdate, 6 * 3600 * 1000);
