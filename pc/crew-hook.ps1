@@ -15,8 +15,10 @@ try {
     if ($t.Length -gt $n) { $t = $t.Substring(0, $n - 1).TrimEnd() + [char]0x2026 }
     return $t
   }
+  # Claude's last reply: its first sentence becomes the note; a reply that ends on a question means it is waiting on you.
   function LastReply([string]$path) {
-    if (-not $path -or -not (Test-Path -LiteralPath $path)) { return '' }
+    $r = @{ note = ''; asks = $false }
+    if (-not $path -or -not (Test-Path -LiteralPath $path)) { return $r }
     $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
     try {
       $len = [Math]::Min($fs.Length, 131072); [void]$fs.Seek(-$len, 'End')
@@ -26,9 +28,16 @@ try {
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
       if ($lines[$i] -notmatch '"type"\s*:\s*"assistant"') { continue }
       try { $j = $lines[$i] | ConvertFrom-Json } catch { continue }
-      foreach ($c in @($j.message.content)) { if ($c.type -eq 'text' -and $c.text.Trim()) { return Clean (($c.text -split '(?<=[.!?])\s')[0]) 140 } }
+      foreach ($c in @($j.message.content)) {
+        if ($c.type -eq 'text' -and $c.text.Trim()) {
+          $r.note = Clean (($c.text -split '(?<=[.!?])\s')[0]) 140
+          $last = ($c.text.Trim() -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+          $r.asks = $last -match '\?\s*[*_`)]*\s*$'
+          return $r
+        }
+      }
     }
-    return ''
+    return $r
   }
 
   $now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -47,7 +56,7 @@ try {
     if ($e.cwd) { $s.folder = Clean (Split-Path -Leaf $e.cwd) 60 }
     switch ($e.hook_event_name) {
       'UserPromptSubmit' { $s.state = 'working'; $s.note = ''; if (-not $s.title) { $s.title = Clean $e.prompt 90 } }
-      'Stop'             { $s.state = 'done'; $s.note = LastReply $e.transcript_path }
+      'Stop'             { $lr = LastReply $e.transcript_path; $s.note = $lr.note; $s.state = $(if ($lr.asks) { 'needs_you' } else { 'done' }) }
       'Notification'     { if ($e.message -match 'permission|approv|allow') { $s.state = 'needs_you'; $s.note = Clean $e.message 140 } else { exit 0 } }
       'SessionEnd'       { if ($s.state -ne 'needs_you') { $s.state = 'done' } }
       default            { }

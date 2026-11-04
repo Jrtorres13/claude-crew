@@ -83,7 +83,9 @@ async function getLive() {
 // Hourly feed covers cloud + project threads; the live feed covers this PC. While the PC is live, its sessions come from it alone.
 function merged() {
   const live = S.live && now() - ts(S.live.generated_at) < 12 * 3600 * 1000 ? S.live : null;
-  const items = [...((S.hourly && S.hourly.items) || []).filter(i => !(live && i.source === "pc")), ...((live && live.items) || [])];
+  // A PC window that crashed never sends "closed": after 3 quiet hours a "working" session counts as done.
+  const liveItems = ((live && live.items) || []).map(i => i.state === "working" && now() - ts(i.updated) > 3 * 3600 * 1000 ? Object.assign({}, i, { state: "done", note: i.note || "Went quiet." }) : i);
+  const items = [...((S.hourly && S.hourly.items) || []).filter(i => !(live && i.source === "pc")), ...liveItems];
   const gens = [S.hourly, live].filter(Boolean).map(f => ts(f.generated_at));
   return { generated_at: gens.length ? new Date(Math.max(...gens)).toISOString() : "", items, sig: [S.hourly && S.hourly.generated_at, live && live.generated_at].join("|") };
 }
