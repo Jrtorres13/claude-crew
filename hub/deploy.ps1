@@ -36,8 +36,10 @@ $dep = (Npx 'wrangler deploy')
 $url = [regex]::Match($dep, 'https://[a-z0-9.-]+\.workers\.dev').Value
 if (-not $url) { Write-Host "Deploy failed:`n$dep" -ForegroundColor Red; exit 1 }
 Write-Host "Hub is live at $url"
-$v = Invoke-RestMethod "$url/vapid"
-if (-not $v.key) { Write-Host 'The hub answered without a key. Something is wrong.' -ForegroundColor Red; exit 1 }
+# A brand-new workers.dev address takes up to a minute to start answering (Cloudflare error 1042 until then).
+$v = $null
+for ($i = 0; $i -lt 12 -and -not $v; $i++) { try { $v = Invoke-RestMethod "$url/vapid" } catch { Write-Host 'Waiting for the new address to come online...'; Start-Sleep -Seconds 10 } }
+if (-not $v -or -not $v.key) { Write-Host 'The hub answered without a key. Something is wrong.' -ForegroundColor Red; exit 1 }
 
 Write-Host 'Pointing your PC scripts at it...'
 $key = (Get-Content (Join-Path $env:LOCALAPPDATA 'ClaudeCrew\config.json') -Raw | ConvertFrom-Json).key
