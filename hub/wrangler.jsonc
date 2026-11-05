@@ -4,8 +4,9 @@
 {
   "name": "claude-crew-hub",
   "main": "src/index.js",
+  "account_id": "586a9b9c33735645c303b38738708df0",
   "compatibility_date": "2026-10-01",
   "kv_namespaces": [
-    { "binding": "CREW", "id": "PASTE_KV_ID" }
+    { "binding": "CREW", "id": "9dd7936b5d8b4bb8b8bdc329e150d410" }
   ]
 }
