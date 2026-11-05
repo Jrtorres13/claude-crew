@@ -9,7 +9,7 @@ Set-Location $hub
 
 Write-Host 'Finding your ecomjayt Cloudflare account...'
 $who = (npx --yes wrangler whoami 2>&1 | Out-String)
-$acct = [regex]::Matches($who, '(?m)^.*ecomjayt.*?([0-9a-f]{32})') | Select-Object -First 1
+$acct = [regex]::Matches($who, '(?im)^.*ecomjayt.*?([0-9a-f]{32})') | Select-Object -First 1
 if (-not $acct) { Write-Host 'Could not find an ecomjayt account in "wrangler whoami". Run: npx wrangler login   then run this again.' -ForegroundColor Red; exit 1 }
 $env:CLOUDFLARE_ACCOUNT_ID = $acct.Groups[1].Value
 Write-Host "Using account $($env:CLOUDFLARE_ACCOUNT_ID)"
