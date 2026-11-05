@@ -47,6 +47,9 @@ async function room(env, id, auth) {
 // At most LIMIT write calls per IP per hour, counted in the edge cache (no KV writes spent on counting).
 const LIMIT = 90;
 async function overLimit(req) {
+  try { return await countIp(req); } catch (e) { return false; } // never let the limiter break alerts or sync
+}
+async function countIp(req) {
   const ip = req.headers.get("CF-Connecting-IP") || "x", hour = Math.floor(Date.now() / 3600000);
   const key = new Request(`https://rl.crew/${encodeURIComponent(ip)}/${hour}`), c = caches.default;
   const n = Number((await (await c.match(key))?.text()) || 0) + 1;
